@@ -1,5 +1,6 @@
 # --- SCRIPT PER CONVERTIRE WORD IN PDF ---
 # Non richiede installazioni esterne. Usa Microsoft Word installato sul PC.
+# Formati supportati: .doc, .docx, .odt, .rtf
 
 # Carichiamo gli strumenti per mostrare le finestre di dialogo
 Add-Type -AssemblyName System.Windows.Forms
@@ -7,7 +8,7 @@ Add-Type -AssemblyName System.Drawing
 
 # 1. Chiediamo all'utente di scegliere la cartella
 $folderBrowser = New-Object System.Windows.Forms.FolderBrowserDialog
-$folderBrowser.Description = "Seleziona la cartella contenente i file Word"
+$folderBrowser.Description = "Seleziona la cartella contenente i file da convertire"
 $folderBrowser.ShowNewFolderButton = $false
 
 $result = $folderBrowser.ShowDialog()
@@ -40,50 +41,61 @@ $wdFormatPDF = 17
 $count = 0
 $errors = 0
 
-# 3. Cerchiamo tutti i file .doc e .docx nelle sottocartelle
-$files = Get-ChildItem -Path $startPath -Include *.doc, *.docx -Recurse -File | Where-Object { $_.Name -notlike "~$*" }
+try {
+    # 3. Cerchiamo tutti i file supportati nelle sottocartelle
+    $files = Get-ChildItem -Path $startPath -Include *.doc, *.docx, *.odt, *.rtf -Recurse -File |
+             Where-Object { $_.Name -notlike "~$*" }
 
-if ($files.Count -eq 0) {
-    Write-Host "Nessun file Word trovato nella cartella selezionata." -ForegroundColor Yellow
-}
-else {
-    Write-Host "Trovati $($files.Count) file. Inizio conversione..." -ForegroundColor Green
-    
-    foreach ($file in $files) {
-        $pdfPath = [System.IO.Path]::ChangeExtension($file.FullName, ".pdf")
-        
-        # Saltiamo se il PDF esiste già
-        if (Test-Path $pdfPath) {
-            Write-Host "Saltato (esiste già): $($file.Name)" -ForegroundColor Gray
-            continue
-        }
+    if ($files.Count -eq 0) {
+        Write-Host "Nessun file trovato nella cartella selezionata." -ForegroundColor Yellow
+    }
+    else {
+        Write-Host "Trovati $($files.Count) file. Inizio conversione..." -ForegroundColor Green
 
-        Write-Host "Convertendo: $($file.Name)..." -NoNewline
+        $i = 0
+        foreach ($file in $files) {
+            $i++
+            $pdfPath = [System.IO.Path]::ChangeExtension($file.FullName, ".pdf")
 
-        try {
-            # Apriamo il documento
-            $doc = $word.Documents.Open($file.FullName, $false, $true) # ReadOnly=True
-            
-            # Salviamo come PDF
-            $doc.SaveAs([ref]$pdfPath, [ref]$wdFormatPDF)
-            
-            # Chiudiamo il documento senza salvare modifiche
-            $doc.Close([ref]$false)
-            
-            Write-Host " OK" -ForegroundColor Green
-            $count++
-        }
-        catch {
-            Write-Host " ERRORE" -ForegroundColor Red
-            Write-Host "Dettagli: $($_.Exception.Message)" -ForegroundColor Red
-            $errors++
+            # Saltiamo se il PDF esiste già
+            if (Test-Path $pdfPath) {
+                Write-Host "[$i/$($files.Count)] Saltato (esiste già): $($file.Name)" -ForegroundColor Gray
+                continue
+            }
+
+            Write-Host "[$i/$($files.Count)] Convertendo: $($file.Name)..." -NoNewline
+
+            $doc = $null
+            try {
+                # Apriamo il documento
+                $doc = $word.Documents.Open($file.FullName, $false, $true) # ReadOnly=True
+
+                # Salviamo come PDF (SaveAs2 supportato da Word 2010+)
+                $doc.SaveAs2([ref]$pdfPath, [ref]$wdFormatPDF)
+
+                Write-Host " OK" -ForegroundColor Green
+                $count++
+            }
+            catch {
+                Write-Host " ERRORE" -ForegroundColor Red
+                Write-Host "Dettagli: $($_.Exception.Message)" -ForegroundColor Red
+                $errors++
+            }
+            finally {
+                if ($null -ne $doc) {
+                    $doc.Close([ref]$false)
+                    [System.Runtime.Interopservices.Marshal]::ReleaseComObject($doc) | Out-Null
+                    $doc = $null
+                }
+            }
         }
     }
 }
-
-# 4. Pulizia finale
-$word.Quit()
-[System.Runtime.Interopservices.Marshal]::ReleaseComObject($word) | Out-Null
+finally {
+    # 4. Pulizia finale — garantita anche in caso di errore
+    $word.Quit()
+    [System.Runtime.Interopservices.Marshal]::ReleaseComObject($word) | Out-Null
+}
 
 Write-Host "`n--- Operazione Completata ---" -ForegroundColor Cyan
 Write-Host "Convertiti: $count"
